@@ -4,6 +4,12 @@ Code emulator plugin for IDA Pro (v 0.0.6)
 
 The plugin is designed for simple data decryption and getting stack strings.  
 
+## Requirements  
+Emulator Unicorn  
+pip install -r requirements.txt  
+or  
+pip install unicorn  
+
 ## Install 
 Copy emu_ida.py into directory C:\Program Files\<IDA Pro 7.x>\plugins  
 
