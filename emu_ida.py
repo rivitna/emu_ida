@@ -9,6 +9,8 @@ Special thanks @herrcore for IDAPython plugin template.
 """
 
 import io
+import os
+import errno
 import binascii
 from unicorn import *
 from unicorn.x86_const import *
@@ -28,9 +30,21 @@ import ida_lines
 __AUTHOR__ = '@rivitna'
 #****************************************************************************
 PLUGIN_NAME = 'Emu'
-VERSION = '0.0.6'
+VERSION = '0.0.7'
 PLUGIN_HOTKEY = 'Alt+E'
 #****************************************************************************
+
+
+# Debug
+DEBUG = False
+
+# Dump data
+DUMP_DATA = True
+DUMP_DIR_PATH = './emu_dumps/'
+
+
+# Comments
+COMMENT_DATA_MAX_LEN = 256
 
 
 # Stack
@@ -40,10 +54,6 @@ EBP_INIT_POS = (3 * STACK_SIZE // 4) & ~0xFF
 
 # Dummy block (block for zero addresses)
 DUMMY_BLOCK_SIZE = 0x100000
-
-
-DEBUG = True
-DEBUG_DUMP_DATA = True
 
 
 # Skipped instructions that are written to memory
@@ -101,17 +111,21 @@ def data_to_text(data):
             s = data.decode('UTF-16-LE')
             prefix = 'L'
 
-    except UnicodeDecodeError:
-        text = ''
-        for i in range(0, data_len, 16):
-            if (text != ''):
-                text += '\n'
-            text += binascii.hexlify(data[i : i + 16], ' ', 1).decode()
-
-    else:
         s = s.strip('\0')
         s = s.encode('unicode_escape').decode().replace('\"', '\\"')
         text = prefix + '\"' + s + '\"'
+
+    except UnicodeDecodeError:
+        text = ''
+
+    finally:
+        ln = min(COMMENT_DATA_MAX_LEN, data_len)
+        for block in (data[i : i + 16] for i in range(0, ln, 16)):
+            if (text != ''):
+                text += '\n'
+            text += binascii.hexlify(block, ' ', 1).decode()
+        if ln < data_len:
+            text += '\n... (%d bytes)' % (data_len - ln)
 
     return text
 
@@ -120,6 +134,26 @@ def trace_log(text):
     """Trace log."""
     with io.open('emutrace.log', 'a') as f:
         f.write(text + '\n')
+
+
+def mkdirs(dir):
+    """Make directories."""
+    try:
+        os.makedirs(dir)
+    except OSError as e:
+        if e.errno != errno.EEXIST:
+            raise
+
+
+def dump_data(code_start_ea, code_end_ea, index, data_ea, data_size, data):
+    """Dump data."""
+    dump_dir_path = (DUMP_DIR_PATH +
+                     '%08X_%08X/' % (code_start_ea, code_end_ea))
+    mkdirs(dump_dir_path)
+    dump_path = (dump_dir_path +
+                 '%02d_%08X_%08x.bin' % (index, data_ea, data_size))
+    with io.open(dump_path, 'wb') as f:
+        f.write(data)
 
 
 def hook_mem_write(uc, access, address, size, value, data_entries):
@@ -211,7 +245,9 @@ def code_emulate():
 
         # Map memory for this emulation
         # Dummy block
-        mu.mem_map(0, min(DUMMY_BLOCK_SIZE, image_base))
+        dummy_size = min(DUMMY_BLOCK_SIZE, image_base)
+        if dummy_size != 0:
+            mu.mem_map(0, dummy_size)
         # Image
         mu.mem_map(image_base, image_size)
         # Stack
@@ -280,15 +316,13 @@ def code_emulate():
             res_data = mu.mem_read(*res_data_entry)
             ida_bytes.set_cmt(start_ea, data_to_text(res_data), 1)
 
-            if DEBUG and DEBUG_DUMP_DATA:
-                # Debug: save data blocks to files
+            if DUMP_DATA:
+                # Save data blocks to files
                 for i, data_entry in enumerate(data_entries):
-                    data = mu.mem_read(*data_entry)
-                    data_dump_name = 'emu_%08X_%08X_%02d_%08X_%08x.bin' % \
-                                         (start_ea, end_ea, i,
-                                          data_entry[0], data_entry[1])
-                    with io.open(data_dump_name, 'wb') as f:
-                        f.write(data)
+                    # Dump data
+                    dump_data(start_ea, end_ea, i,
+                              data_entry[0], data_entry[1],
+                              mu.mem_read(*data_entry))
 
         print('Emu: Code emulation done.')
 
